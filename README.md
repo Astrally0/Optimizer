@@ -36,7 +36,7 @@ Removes and cleans up a specific tracked object by its direct reference.
 ### `Optimizer:RemoveByTag(tag: string): boolean`
 Locates an object by its tag, cleans it up safely, and removes it from the tracker.
 
-### `Optimizer:Batch(tag: string?, callback: (optimizer: Optimizer) -> ())`
+### `Optimizer:Batch(callback: (optimizer: Optimizer, tag: string?) -> ())`
 Executes a block of code as a single transaction. Automatically rolls back internal tracking allocations on failure. Supports full scoping nesting.
 
 ### `Optimizer:CleanUp()`
