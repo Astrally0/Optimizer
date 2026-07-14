@@ -177,16 +177,43 @@ end
 	@param tag string?
 	@param callback (optimizer: Optimizer) -> ()
 ]=]
-function Optimizer.Batch(self: Optimizer, callback: (optimizer: Optimizer) -> (), tag: string?)
+function Optimizer.Batch(self: Optimizer, tag: string? | ((optimizer: Optimizer) -> ()), callback: ((optimizer: Optimizer) -> ())?)
 	if not self.objects then return end
 
+	local realTag: string?
+	local realCallback: (optimizer: Optimizer) -> ()
+
+	if typeof(tag) == "function" then
+		realCallback = tag
+		realTag = nil
+	else
+		realTag = tag
+		realCallback = callback :: (optimizer: Optimizer) -> ()
+	end
+
+	if not realCallback then return end
+
 	local batchAllocations = {}
+	local isAborted = false
 
 	local batchProxy = setmetatable({}, {
 		__index = function(_, key)
 			if key == "Add" then
 				return function(_, innerTag, source)
-					local addedSource = self:Add(innerTag or tag, source)
+					if isAborted then 
+						return source 
+					end
+
+					if #batchAllocations >= 5 then
+						isAborted = true
+						error(
+							`Transaction aborted in Batch. \n` ..
+								`RENDER LIMIT REACHED \n` ..
+								`traceback: {debug.traceback()}`
+						)
+					end
+
+					local addedSource = self:Add(innerTag or realTag, source)
 
 					if self.objects and #self.objects > 0 then
 						local lastObj = self.objects[#self.objects]
@@ -195,36 +222,41 @@ function Optimizer.Batch(self: Optimizer, callback: (optimizer: Optimizer) -> ()
 
 					return addedSource
 				end
+			elseif key == "CleanUp" then
+				return function()
+					for i = #batchAllocations, 1, -1 do
+						local trackedObj = batchAllocations[i]
+
+						if trackedObj.disconnect then
+							pcall(trackedObj.disconnect)
+						end
+
+						if self.objects then
+							local globalIndex = table.find(self.objects, trackedObj)
+							if globalIndex then
+								table.remove(self.objects, globalIndex)
+							end
+						end
+						batchAllocations[i] = nil
+					end
+				end
 			end
+
 			return (self :: any)[key]
 		end
 	})
 
-	local success, err = pcall(callback, batchProxy)
+	local success, err = pcall(realCallback, batchProxy)
 
 	if not success then
-		warn(
-			`Transaction failed inside Batch '{tag or "nested_batch"}'. Rolling back local allocations! \n`,
-			`error message: {err} \n`,
-			`traceback: {debug.traceback()}`
+		batchProxy:CleanUp()
+		
+		error(
+			`Transaction failed inside Batch '{realTag or "anonymous"}'. Rolling back local allocations! \n` ..
+			`error message: {err} \n` ..
+			`traceback: {debug.traceback()}`,
+			2
 		)
-
-		for i = #batchAllocations, 1, -1 do
-			local trackedObj = batchAllocations[i]
-
-			if trackedObj.disconnect then
-				pcall(trackedObj.disconnect)
-			end
-
-			if self.objects then
-				local globalIndex = table.find(self.objects, trackedObj)
-				if globalIndex then
-					table.remove(self.objects, globalIndex)
-				end
-			end
-		end
-
-		error(err)
 	end
 end
 
